@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Android CI on Jenkins — User Manual</title>
+<style>
+  @page { size: A4; margin: 20mm 18mm; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: #1a1a1a;
+    line-height: 1.55;
+    font-size: 13px;
+    max-width: 780px;
+    margin: 0 auto;
+  }
+  h1 {
+    font-size: 26px;
+    margin-bottom: 4px;
+    border-bottom: 3px solid #2b6cb0;
+    padding-bottom: 10px;
+  }
+  .subtitle {
+    color: #555;
+    font-size: 13px;
+    margin-top: 0;
+    margin-bottom: 30px;
+  }
+  h2 {
+    font-size: 18px;
+    color: #2b6cb0;
+    margin-top: 34px;
+    padding-top: 6px;
+    border-top: 1px solid #ddd;
+    page-break-after: avoid;
+  }
+  h3 {
+    font-size: 14.5px;
+    margin-top: 22px;
+    margin-bottom: 6px;
+    page-break-after: avoid;
+  }
+  p { margin: 8px 0; }
+  code {
+    background: #f0f2f5;
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-family: "SF Mono", Consolas, Menlo, monospace;
+    font-size: 12px;
+    color: #b1361e;
+  }
+  pre {
+    background: #1e2530;
+    color: #e8ecf1;
+    border-radius: 6px;
+    padding: 12px 14px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 11.5px;
+    line-height: 1.5;
+    page-break-inside: avoid;
+  }
+  pre code { background: none; color: inherit; padding: 0; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 10px 0 16px;
+    font-size: 12px;
+  }
+  th, td {
+    border: 1px solid #d5dae0;
+    padding: 6px 9px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: #eef2f7; }
+  .steps { counter-reset: step; list-style: none; padding-left: 0; }
+  .steps > li {
+    counter-increment: step;
+    margin: 10px 0;
+    padding-left: 34px;
+    position: relative;
+  }
+  .steps > li::before {
+    content: counter(step);
+    position: absolute;
+    left: 0; top: 0;
+    width: 22px; height: 22px;
+    background: #2b6cb0;
+    color: white;
+    border-radius: 50%;
+    font-size: 11px;
+    font-weight: bold;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .note {
+    background: #fff8e1;
+    border-left: 4px solid #e0a800;
+    padding: 8px 12px;
+    margin: 10px 0;
+    font-size: 12px;
+  }
+  .box {
+    background: #eef6ff;
+    border-left: 4px solid #2b6cb0;
+    padding: 8px 12px;
+    margin: 10px 0;
+    font-size: 12px;
+  }
+  .path { font-family: monospace; font-size: 12px; color: #333; }
+  .section-break { page-break-before: always; }
+  ul, ol { margin: 6px 0; padding-left: 22px; }
+  li { margin: 3px 0; }
+</style>
+</head>
+<body>
+
+<h1>Android CI on Jenkins</h1>
+<p class="subtitle">User manual — setup, day-to-day usage, and troubleshooting.</p>
+
+<h2>1. What this system is</h2>
+<p>
+Jenkins builds Android projects inside disposable Docker containers, so builds don't
+depend on any developer's locally-installed JDK or Android SDK. There are two ways a
+project gets built:
+</p>
+<ul>
+  <li><strong>A project with its own CI files</strong> — some projects (e.g. an
+  existing project you've already set up) carry their own Dockerfile and Jenkinsfile
+  checked into that project's repo.</li>
+  <li><strong>Any other Android project, onboarded with zero repo changes</strong> —
+  built through this shared setup: one generic Docker image plus a Jenkins Shared
+  Library, both living in this <code>jenkins-ci-tooling</code> repo. Onboarding a
+  project touches <em>zero files</em> in that project's own repository — the whole
+  pipeline is configured inside Jenkins itself.</li>
+</ul>
+<p>Both approaches produce a debug APK, run unit tests, and publish results the same
+way.</p>
+
+<h2>2. One-time setup on a new machine</h2>
+<p><strong>Prerequisites</strong>: Docker installed and running; Jenkins installed and
+running as a service, with the Pipeline, Git, JUnit, Credentials Binding, and Docker
+Pipeline plugins (these ship with most default Jenkins installs — if Docker Pipeline
+isn't present, install it from Manage Jenkins → Plugins).</p>
+
+<ol class="steps">
+  <li><strong>Clone this repo</strong> somewhere on the machine running Jenkins:
+    <pre><code>git clone &lt;this-repo-location&gt; /path/to/jenkins-ci-tooling</code></pre>
+  </li>
+  <li><strong>Allow Jenkins to check out local git repositories.</strong> This repo,
+  and any per-project repos you point Jenkins at via a local path, live on local disk
+  rather than a remote host — Git treats that as a security boundary by default:
+    <pre><code>sudo git config --system --add safe.directory '*'</code></pre>
+  </li>
+  <li><strong>Allow Jenkins' Git plugin to check out from local filesystem paths.</strong>
+  Blocked by default as a separate security guard:
+    <pre><code>sudo mkdir -p /etc/systemd/system/jenkins.service.d
+sudo tee /etc/systemd/system/jenkins.service.d/override.conf > /dev/null &lt;&lt;'EOF'
+[Service]
+Environment="JAVA_OPTS=-Djava.awt.headless=true -Dhudson.plugins.git.GitSCM.ALLOW_LOCAL_CHECKOUT=true"
+EOF
+sudo systemctl daemon-reload
+sudo systemctl restart jenkins</code></pre>
+    <div class="note">If your Jenkins install already sets other <code>JAVA_OPTS</code>,
+    merge them into this line instead of replacing it. If every project you'll build is
+    hosted on GitHub/GitLab/etc. rather than a local path, steps 2 and 3 aren't strictly
+    required — doing them anyway is harmless.</div>
+  </li>
+  <li><strong>Build the generic Docker image once:</strong>
+    <pre><code>docker build -t android-generic-build:latest /path/to/jenkins-ci-tooling/docker/android-generic-image</code></pre>
+    Re-run this whenever the Dockerfile changes.
+  </li>
+  <li><strong>Register the Shared Library in Jenkins:</strong> Manage Jenkins → System
+  → <strong>Global Trusted Pipeline Libraries</strong> → Add:
+    <ul>
+      <li>Name: <code>android-ci</code></li>
+      <li>Default version: <code>main</code></li>
+      <li>Retrieval method: Modern SCM → Git</li>
+      <li>Project Repository: <code>/path/to/jenkins-ci-tooling</code> (wherever you cloned it)</li>
+      <li>Credentials: none needed for a local path</li>
+      <li>Load implicitly: leave unchecked</li>
+    </ul>
+    Save.
+  </li>
+</ol>
+<div class="box">You're now ready to build any Android project.</div>
+
+<h2>3. Onboarding a new Android project into Jenkins</h2>
+<p>Entirely done in the Jenkins UI. Nothing gets added to the new project's own
+repository.</p>
+
+<h3>Step 1 — Credential</h3>
+<p>Decide whether to reuse an existing Jenkins credential or create a new one, scoped
+to the new repo:</p>
+<ul>
+  <li><strong>Manage Jenkins → Credentials</strong> → Add Credentials</li>
+  <li>Kind: <em>Username with password</em></li>
+  <li>Username: your Git host username</li>
+  <li>Password: a fine-grained Personal Access Token, scoped to only that repo, with
+  <strong>read-only content</strong> permission</li>
+</ul>
+
+<h3>Step 2 — Create the Jenkins job</h3>
+<ol class="steps">
+  <li><strong>New Item</strong> → give it a name → type <strong>Pipeline</strong> → OK.</li>
+  <li>Under <strong>Pipeline</strong>, set Definition to <strong>Pipeline script</strong>
+  (inline — <em>not</em> "Pipeline script from SCM").</li>
+  <li>Paste the script below, filling in that project's repo URL and the credential ID
+  from Step 1.</li>
+  <li>Save, then <strong>Build Now</strong>.</li>
+</ol>
+
+<pre><code>@Library('android-ci') _
+
+androidBuildPipeline(
+    repoUrl: 'https://github.com/&lt;org&gt;/&lt;new-project&gt;.git',
+    credentialsId: 'the-credential-id-you-picked'
+)</code></pre>
+
+<div class="box">
+That's the entire job. It checks out the repo, runs <code>assembleDebug</code> and
+<code>testDebugUnitTest</code>, publishes JUnit results, and archives a renamed APK —
+without any Dockerfile or Jenkinsfile existing in that project's repo.
+</div>
+
+<h3>Overriding the defaults</h3>
+<p>If the new project doesn't follow the standard single-<code>app</code>-module
+convention, add any of these named parameters to the same call:</p>
+<table>
+  <tr><th>Parameter</th><th>Default</th><th>When to override</th></tr>
+  <tr><td><code>branch</code></td><td><code>main</code></td><td>Project uses a different default branch</td></tr>
+  <tr><td><code>buildTask</code></td><td><code>assembleDebug</code></td><td>Different build variant/flavour</td></tr>
+  <tr><td><code>testTask</code></td><td><code>testDebugUnitTest</code></td><td>Different test variant</td></tr>
+  <tr><td><code>apkGlob</code></td><td><code>app/build/outputs/apk/debug/*.apk</code></td><td>Module isn't named <code>app</code>, or different variant path</td></tr>
+  <tr><td><code>projectName</code></td><td>derived from the repo URL</td><td>Want a different name in the archived APK filename</td></tr>
+  <tr><td><code>image</code></td><td><code>android-generic-build:latest</code></td><td>Project needs a different JDK/base image</td></tr>
+  <tr><td><code>sdkVolume</code> / <code>gradleVolume</code></td><td>shared across all projects</td><td>Project needs an isolated cache</td></tr>
+</table>
+
+<h2>4. Building locally, without Jenkins (Docker only)</h2>
+<p>Two options, depending on the project:</p>
+
+<h3>A project with its own build script</h3>
+<p>Some projects (e.g. one that already has its own Dockerfile/Jenkinsfile checked in)
+carry their own convenience script, typically <code>ci/build-apk.sh</code> in that
+project's repo. Run it from inside that project's checkout:</p>
+<pre><code>./ci/build-apk.sh</code></pre>
+
+<h3>Any Android project — the generic script</h3>
+<p>Works for literally any Android project, with no per-project script needed. Lives in
+this <code>jenkins-ci-tooling</code> repo:</p>
+<pre><code>./scripts/build-apk.sh &lt;git-repo-url-or-local-path&gt; [gradle-task]
+
+# Examples:
+./scripts/build-apk.sh https://github.com/someorg/some-app.git
+./scripts/build-apk.sh ~/code/some-app assembleRelease</code></pre>
+<p>Clones the repo if given a URL (into a temporary directory, cleaned up afterward —
+copy the APK out before it exits if you need it kept), or builds an existing local
+checkout in place if given a path. Prints the path to the resulting APK when done.</p>
+<p>Both approaches require only Docker installed — no JDK, no Android SDK — and share
+the same cache volumes as the Jenkins jobs, so a warm cache benefits every build
+regardless of which entry point you use.</p>
+
+<h2>5. APK naming (Jenkins-built projects)</h2>
+<p>Every archived APK from a project onboarded through the shared library is
+automatically renamed to:</p>
+<pre><code>&lt;project-name&gt;-&lt;version-name&gt;-&lt;build-date&gt;-&lt;variant&gt;.apk</code></pre>
+<p>Example from a real build: <code>mobility-tracker-poc-0.1-m1-20260831-debug.apk</code></p>
+<p>Project name comes from the repo URL (or the <code>projectName</code> override),
+version comes from the app's own <code>versionName</code> (read automatically from AGP's
+build metadata — no project-specific configuration needed), date is the build date, and
+variant reflects the build type/flavour actually built.</p>
+
+<h2>6. Why builds get faster after the first run</h2>
+<p>Two things are cached in named Docker volumes shared across every project built this
+way:</p>
+<ul>
+  <li><strong>Android SDK components</strong> — platforms and build-tools are
+  downloaded on first use and reused by every subsequent build, of any project, that
+  needs the same version.</li>
+  <li><strong>Gradle's dependency cache</strong> — the Gradle distribution itself and
+  common libraries (Kotlin stdlib, AndroidX, etc.) are downloaded once and reused.</li>
+</ul>
+<div class="note">
+Because the cache is shared across projects, two different projects' builds running at
+the exact same moment can briefly wait on each other (a lock, not a failure or
+corruption) — this is expected and was verified deliberately. It resolves itself within
+seconds to a couple of minutes depending on what's being downloaded.
+</div>
+
+<h2 class="section-break">7. Troubleshooting</h2>
+<table>
+  <tr><th>Symptom</th><th>Cause &amp; fix</th></tr>
+  <tr>
+    <td><code>detected dubious ownership in repository</code></td>
+    <td>Git's ownership-mismatch protection. Covered by setup step 2
+    (<code>git config --system --add safe.directory '*'</code>). If it reappears, that
+    command may not have actually run — re-run it and confirm no error.</td>
+  </tr>
+  <tr>
+    <td><code>Checkout ... aborted because it references a local directory</code></td>
+    <td>Jenkins' Git plugin blocks local-path checkouts by default. Covered by setup
+    step 3. Confirm the running Jenkins process actually has the flag (check its command
+    line) — a config file edit alone doesn't apply until Jenkins is restarted.</td>
+  </tr>
+  <tr>
+    <td><code>Unable to find Jenkinsfile from git</code></td>
+    <td>Only applies to a project using its own Dockerfile/Jenkinsfile (not the shared
+    library path). Means changes were made locally but never committed and pushed to
+    that project's remote.</td>
+  </tr>
+  <tr>
+    <td><code>SDK directory is not writable</code> / a build-tools install fails</td>
+    <td>Should not happen — the generic image makes the SDK directory world-writable as
+    its last build step. If it does, the image may need rebuilding (step 4 of setup).</td>
+  </tr>
+  <tr>
+    <td>403 / "Write access to repository not granted" on checkout</td>
+    <td>The credential's token doesn't have read permission on that specific repo, or
+    the token needs regenerating after a permission change.</td>
+  </tr>
+  <tr>
+    <td>Build seems to hang partway through</td>
+    <td>Likely waiting on the shared cache lock because another project's build is
+    running at the same time — see Section 6. Check the Jenkins dashboard for other
+    active builds.</td>
+  </tr>
+  <tr>
+    <td><code>Missing required parameter for agent type "docker": image</code></td>
+    <td>A shared-library config using a local variable literally named
+    <code>image</code>/<code>args</code>/etc. collides with the declarative pipeline's
+    own directive keywords. Rename the variable if you're editing
+    <code>vars/androidBuildPipeline.groovy</code>.</td>
+  </tr>
+</table>
+
+<h2>Appendix — file &amp; resource locations</h2>
+<table>
+  <tr><th>What</th><th>Location</th></tr>
+  <tr><td>Generic build image</td><td class="path">&lt;jenkins-ci-tooling&gt;/docker/android-generic-image/Dockerfile</td></tr>
+  <tr><td>Shared pipeline library step</td><td class="path">&lt;jenkins-ci-tooling&gt;/vars/androidBuildPipeline.groovy</td></tr>
+  <tr><td>Generic QA build script</td><td class="path">&lt;jenkins-ci-tooling&gt;/scripts/build-apk.sh</td></tr>
+  <tr><td>Rebuild the generic image</td><td class="path">docker build -t android-generic-build:latest &lt;jenkins-ci-tooling&gt;/docker/android-generic-image</td></tr>
+  <tr><td>Shared SDK cache volume</td><td class="path">Docker volume: android-sdk-cache</td></tr>
+  <tr><td>Shared Gradle cache volume</td><td class="path">Docker volume: android-gradle-cache</td></tr>
+  <tr><td>Global Trusted Pipeline Library registration</td><td class="path">Manage Jenkins → System → Global Trusted Pipeline Libraries → name "android-ci"</td></tr>
+  <tr><td>Local-checkout security override</td><td class="path">/etc/systemd/system/jenkins.service.d/override.conf</td></tr>
+  <tr><td>A project with its own CI files (example)</td><td class="path">that project's own repo root: Dockerfile under <code>ci/</code>, Jenkinsfile at repo root, QA script at <code>ci/build-apk.sh</code></td></tr>
+</table>
+
+</body>
+</html>
