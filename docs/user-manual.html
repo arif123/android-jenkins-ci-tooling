@@ -236,8 +236,26 @@ convention, add any of these named parameters to the same call:</p>
   <tr><td><code>apkGlob</code></td><td><code>app/build/outputs/apk/debug/*.apk</code></td><td>Module isn't named <code>app</code>, or different variant path</td></tr>
   <tr><td><code>projectName</code></td><td>derived from the repo URL</td><td>Want a different name in the archived APK filename</td></tr>
   <tr><td><code>image</code></td><td><code>android-generic-build:latest</code></td><td>Project needs a different JDK/base image</td></tr>
-  <tr><td><code>sdkVolume</code> / <code>gradleVolume</code></td><td>shared across all projects</td><td>Project needs an isolated cache</td></tr>
 </table>
+
+<p>Example — a project called <code>widget-scanner</code> that builds a <code>release</code>
+flavour out of a <code>widget-app</code> module on a <code>develop</code> branch, and needs a
+newer JDK image:</p>
+<pre><code>@Library('android-ci') _
+
+androidBuildPipeline(
+    repoUrl:        'https://github.com/someorg/widget-scanner.git',
+    credentialsId:  'widget-scanner-readonly',
+    branch:         'develop',
+    buildTask:      'assembleRelease',
+    testTask:       'testReleaseUnitTest',
+    apkGlob:        'widget-app/build/outputs/apk/release/*.apk',
+    projectName:    'widget-scanner',
+    image:          'android-generic-build:jdk21'
+)</code></pre>
+<p>Every parameter here is optional and independent — override only the ones that
+differ from the defaults in the table above, and drop the rest. <code>repoUrl</code>
+and <code>credentialsId</code> are the only two that are always required.</p>
 
 <h2>4. Building locally, without Jenkins (Docker only)</h2>
 <p>Two options, depending on the project:</p>
