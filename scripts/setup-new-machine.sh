@@ -29,7 +29,12 @@ usermod -aG docker "$REAL_USER"
 echo "==> Installing Jenkins (official LTS repo)"
 if ! command -v jenkins &>/dev/null; then
   apt-get install -y openjdk-21-jre
-  curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key \
+  # Jenkins rotates this signing key periodically and renames the file (e.g.
+  # jenkins.io-2026.key); pull whichever *.key is currently listed instead of
+  # hardcoding a year that will go stale.
+  JENKINS_KEY_URL="$(curl -fsSL https://pkg.jenkins.io/debian-stable/ \
+    | grep -oE 'href="[^"]*\.key"' | sed 's/href="//;s/"$//' | sort | tail -1)"
+  curl -fsSL "$JENKINS_KEY_URL" \
     | tee /usr/share/keyrings/jenkins-keyring.asc > /dev/null
   echo "deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/" \
     | tee /etc/apt/sources.list.d/jenkins.list > /dev/null
