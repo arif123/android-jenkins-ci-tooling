@@ -25,14 +25,10 @@ def call(Map config) {
     def projectName = config.projectName ?: (repoUrl.tokenize('/').last() - '.git')
     def apkDir = apkGlob.substring(0, apkGlob.lastIndexOf('/'))
     def outputMetadataJson = config.outputMetadataJson ?: "${apkDir}/output-metadata.json"
+    def dockerArgs = "-v ${sdkVolume}:/opt/android-sdk -v ${gradleVolume}:/home/builder/.gradle"
 
     pipeline {
-        agent {
-            docker {
-                image dockerImage
-                args "-v ${sdkVolume}:/opt/android-sdk -v ${gradleVolume}:/home/builder/.gradle"
-            }
-        }
+        agent none
 
         options {
             timestamps()
@@ -40,12 +36,28 @@ def call(Map config) {
         }
 
         stages {
+            stage('Fix Cache Ownership') {
+                // The named cache volumes are also used by local scripts/build-apk.sh
+                // runs, which build as a different host UID. Gradle's own daemon
+                // registry does an internal chmod() on its state directory, which the
+                // OS only permits for the file's owner (or root) no matter how open the
+                // permission bits already are - so ownership itself has to move to
+                // whichever UID is about to build (here, whatever UID Jenkins runs as)
+                // before every build, not just once.
+                agent any
+                steps {
+                    sh "docker run --rm ${dockerArgs} ${dockerImage} " +
+                       'chown -R $(id -u):$(id -g) /opt/android-sdk /home/builder/.gradle'
+                }
+            }
             stage('Checkout') {
+                agent { docker { image dockerImage; args dockerArgs } }
                 steps {
                     git branch: branch, url: repoUrl, credentialsId: credentialsId
                 }
             }
             stage('Build') {
+                agent { docker { image dockerImage; args dockerArgs } }
                 steps {
                     sh "./gradlew ${buildTask} --stacktrace"
                 }
@@ -55,6 +67,7 @@ def call(Map config) {
                 // variantName) instead of guessing/parsing build.gradle - this is the
                 // same file AGP writes next to the APK for every variant build, so it
                 // works regardless of how a project derives its own version scheme.
+                agent { docker { image dockerImage; args dockerArgs } }
                 steps {
                     script {
                         def versionName = sh(
@@ -72,6 +85,7 @@ def call(Map config) {
                 }
             }
             stage('Unit Test') {
+                agent { docker { image dockerImage; args dockerArgs } }
                 steps {
                     sh "./gradlew ${testTask} --stacktrace"
                 }
@@ -79,13 +93,10 @@ def call(Map config) {
                     always {
                         junit testResultsGlob
                     }
+                    success {
+                        archiveArtifacts artifacts: env.RENAMED_APK, fingerprint: true
+                    }
                 }
-            }
-        }
-
-        post {
-            success {
-                archiveArtifacts artifacts: env.RENAMED_APK, fingerprint: true
             }
         }
     }
